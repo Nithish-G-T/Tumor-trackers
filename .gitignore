@@ -1,0 +1,113 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyTorch
+*.pth
+!tumor_model.pth
+
+# Firebase credentials
+firebase-service-account.json
+firebase-service-account-*.json
+*.pt
+*.pkl
+*.h5
+*.hdf5
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+log/
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+*.temp
+
+# Audio files
+*.mp3
+*.wav
+*.ogg
+
+# Images (except sample/test images)
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.tiff
+*.tif
+!sample_*.jpg
+!test_*.png
+
+# Docker
+.dockerignore
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Model files (keep the main one)
+tumor_model.pth
+
+# Uploads
+uploads/
+*.upload
+
+# Cache
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Backup files
+*.bak
+*.backup
+*.old
