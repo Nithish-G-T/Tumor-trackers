@@ -1,11 +1,10 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision import transforms, models
+from torchvision import transforms
 from torchvision.models import efficientnet_b3, EfficientNet_B3_Weights
 import numpy as np
 import matplotlib.pyplot as plt
-import cv2
 from PIL import Image
 import base64
 import io
@@ -89,16 +88,12 @@ class TumorPredictor:
             torch.Tensor: Preprocessed image tensor
         """
         if isinstance(image, np.ndarray):
-            # Convert numpy array to PIL Image
             if len(image.shape) == 3 and image.shape[2] == 3:
                 image = Image.fromarray(image)
             else:
-                # Convert grayscale to RGB
                 image = Image.fromarray(image).convert('RGB')
         
-        # Apply transforms
-        image_tensor = self.transform(image).unsqueeze(0).to(self.device)
-        return image_tensor
+        return self.transform(image).unsqueeze(0).to(self.device)
     
     def predict(self, image):
         """
@@ -110,10 +105,7 @@ class TumorPredictor:
         Returns:
             dict: Prediction results with class, confidence, and probabilities
         """
-        # Preprocess image
         image_tensor = self.preprocess_image(image)
-        
-        # Perform inference
         with torch.no_grad():
             outputs = self.model(image_tensor)
             probabilities = F.softmax(outputs, dim=1)
@@ -126,150 +118,131 @@ class TumorPredictor:
             'probabilities': probabilities[0].cpu().numpy().tolist(),
             'class_names': self.class_names
         }
-    
+
     def generate_gradcam(self, image, target_class=None):
         """
         Generate Grad-CAM visualization for the input image.
-        
+
         Args:
             image: PIL Image or numpy array
             target_class (int): Target class for Grad-CAM (if None, uses predicted class)
-            
+
         Returns:
             str: Base64 encoded Grad-CAM image
         """
         try:
-            # Preprocess image
             image_tensor = self.preprocess_image(image)
-            original_image = image_tensor.clone()
-            
-            # Set up for gradient computation
-            image_tensor.requires_grad_(True)
-            
+
+            # Hooks to capture feature maps and gradients
+            feature_maps = []
+            gradients = []
+
+            def forward_hook(module, input, output):
+                feature_maps.append(output)
+
+            def backward_hook(module, grad_in, grad_out):
+                gradients.append(grad_out[0])
+
+            # Register hooks on last conv layer
+            target_layer = self.model.features[-1][0]
+            f_handle = target_layer.register_forward_hook(forward_hook)
+            b_handle = target_layer.register_full_backward_hook(backward_hook)
+
             # Forward pass
             outputs = self.model(image_tensor)
-            
             if target_class is None:
                 target_class = torch.argmax(outputs, dim=1).item()
-            
+
             # Backward pass
             self.model.zero_grad()
             outputs[0, target_class].backward()
-            
-            # Get gradients and feature maps
-            gradients = image_tensor.grad
-            feature_maps = self.model.features(image_tensor.detach())
-            
-            # Global average pooling of gradients
-            pooled_gradients = torch.mean(gradients, dim=[0, 2, 3])
-            
-            # Weight the feature maps
-            weighted_feature_maps = torch.zeros_like(feature_maps)
-            for i, weight in enumerate(pooled_gradients):
-                weighted_feature_maps[:, i, :, :] = weight * feature_maps[:, i, :, :]
-            
-            # Generate heatmap
-            heatmap = torch.mean(weighted_feature_maps, dim=1).squeeze()
-            heatmap = F.relu(heatmap)
-            heatmap = F.interpolate(heatmap.unsqueeze(0).unsqueeze(0), 
-                                   size=(300, 300), mode='bilinear', align_corners=False)
-            heatmap = heatmap.squeeze().detach().cpu().numpy()
-            
-            # Normalize heatmap
-            heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min())
-            
-            # Convert original image for visualization
-            original_np = original_image.squeeze().detach().cpu().numpy()
-            original_np = np.transpose(original_np, (1, 2, 0))
+
+            # Remove hooks
+            f_handle.remove()
+            b_handle.remove()
+
+            # Extract maps & gradients
+            feature_map = feature_maps[0].detach()
+            gradient = gradients[0].detach()
+
+            # Compute weights (GAP)
+            weights = torch.mean(gradient, dim=(2, 3), keepdim=True)
+
+            # Compute Grad-CAM
+            gradcam = torch.sum(weights * feature_map, dim=1, keepdim=True)
+            gradcam = F.relu(gradcam)
+            gradcam = F.interpolate(gradcam, size=(300, 300), mode='bilinear', align_corners=False)
+            heatmap = gradcam.squeeze().cpu().numpy()
+            heatmap = (heatmap - heatmap.min()) / (heatmap.max() - heatmap.min() + 1e-8)
+
+            # Prepare original image
+            original_np = image_tensor.squeeze().cpu().numpy().transpose(1, 2, 0)
             original_np = (original_np - original_np.min()) / (original_np.max() - original_np.min())
-            
-            # Create visualization
+
+            # Visualization
             plt.figure(figsize=(10, 5))
-            
-            # Original image
             plt.subplot(1, 2, 1)
             plt.imshow(original_np)
             plt.title('Original MRI Image')
             plt.axis('off')
-            
-            # Grad-CAM overlay
+
             plt.subplot(1, 2, 2)
             plt.imshow(original_np)
             plt.imshow(heatmap, alpha=0.6, cmap='jet')
             plt.title(f'Grad-CAM: {self.class_names[target_class]}')
             plt.axis('off')
-            
-            # Save to base64
+
             buffer = io.BytesIO()
             plt.tight_layout()
             plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
             buffer.seek(0)
             plt.close()
-            
-            # Convert to base64
-            image_base64 = base64.b64encode(buffer.getvalue()).decode()
-            return image_base64
-            
+
+            return base64.b64encode(buffer.getvalue()).decode()
+
         except Exception as e:
             print(f"Grad-CAM generation failed: {e}")
-            # Return a simple visualization as fallback
             return self._create_fallback_visualization(image, target_class)
-    
+
     def _create_fallback_visualization(self, image, target_class=None):
         """
         Create a fallback visualization when Grad-CAM fails.
         """
         try:
-            # Preprocess image
             image_tensor = self.preprocess_image(image)
-            original_np = image_tensor.squeeze().detach().cpu().numpy()
-            original_np = np.transpose(original_np, (1, 2, 0))
+            original_np = image_tensor.squeeze().cpu().numpy().transpose(1, 2, 0)
             original_np = (original_np - original_np.min()) / (original_np.max() - original_np.min())
-            
-            # Create simple visualization
+
             plt.figure(figsize=(10, 5))
-            
-            # Original image
             plt.subplot(1, 2, 1)
             plt.imshow(original_np)
             plt.title('Original MRI Image')
             plt.axis('off')
-            
-            # Simple overlay
+
             plt.subplot(1, 2, 2)
             plt.imshow(original_np)
             plt.title('Analysis Complete')
             plt.axis('off')
-            
-            # Save to base64
+
             buffer = io.BytesIO()
             plt.tight_layout()
             plt.savefig(buffer, format='png', dpi=150, bbox_inches='tight')
             buffer.seek(0)
             plt.close()
-            
-            # Convert to base64
-            image_base64 = base64.b64encode(buffer.getvalue()).decode()
-            return image_base64
-            
+
+            return base64.b64encode(buffer.getvalue()).decode()
+
         except Exception as e:
             print(f"Fallback visualization also failed: {e}")
             return None
-    
+
     def generate_medical_summary(self, prediction):
         """
         Generate a medical-style summary based on the prediction.
-        
-        Args:
-            prediction (dict): Prediction results from predict() method
-            
-        Returns:
-            str: Medical summary text
         """
         tumor_type = prediction['class']
         confidence = prediction['confidence']
-        
-        # Medical descriptions for each tumor type
+
         tumor_descriptions = {
             'glioma': {
                 'description': 'Gliomas are tumors that arise from glial cells in the brain.',
@@ -296,10 +269,9 @@ class TumorPredictor:
                 'symptoms': 'No tumor-related symptoms expected.'
             }
         }
-        
+
         info = tumor_descriptions.get(tumor_type, tumor_descriptions['no_tumor'])
-        
-        # Generate confidence level description
+
         if confidence >= 0.95:
             confidence_level = "very high"
         elif confidence >= 0.85:
@@ -308,16 +280,14 @@ class TumorPredictor:
             confidence_level = "moderate"
         else:
             confidence_level = "low"
-        
-        # Determine malignancy based on tumor type
+
         if tumor_type == 'glioma':
             malignancy = 'MALIGNANT'
         elif tumor_type in ['meningioma', 'pituitary', 'no_tumor']:
             malignancy = 'BENIGN'
         else:
             malignancy = 'UNKNOWN'
-        
-        # Create medical summary
+
         summary = f"""
 MEDICAL ANALYSIS REPORT
 
@@ -345,5 +315,5 @@ RECOMMENDATIONS:
 
 NOTE: This analysis is based on AI-assisted image interpretation and should be reviewed by qualified medical professionals.
         """.strip()
-        
+
         return summary

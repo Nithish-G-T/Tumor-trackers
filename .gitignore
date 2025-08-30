@@ -22,16 +22,17 @@ wheels/
 MANIFEST
 
 # PyTorch
-*.pth
 !tumor_model.pth
 
 # Firebase credentials
 firebase-service-account.json
+firebase-service-account.json.example
 firebase-service-account-*.json
 *.pt
 *.pkl
 *.h5
 *.hdf5
+FIREBASE_SETUP.md
 
 # Virtual environments
 venv/
@@ -89,13 +90,6 @@ tmp/
 .env
 .env.local
 .env.production
-
-# Jupyter Notebook
-.ipynb_checkpoints
-*.ipynb
-
-# Model files (keep the main one)
-tumor_model.pth
 
 # Uploads
 uploads/
